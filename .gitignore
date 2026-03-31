@@ -143,10 +143,12 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+docs/planning
 
 # Spyder project settings
 .spyderproject
 .spyproject
+nexus-apex.code-workspace
 
 # Rope project settings
 .ropeproject
