@@ -1,226 +1,147 @@
-# Nexus Apex
-## A Inteligência em Movimento do Mercado Financeiro
+# Nexus Apex - Pipeline de Dados de Mercado Financeiro
+### Documentação do Projeto
 
-```
- ╔════════════════════════════════════════════════════════════════╗
- ║  Pipeline de Dados | Múltiplos Mercados | Arquitetura Kappa    ║
- ║  Versão 1.0 • Brasil · EUA · Global (Cripto, Forex, Macro)     ║
- ╚════════════════════════════════════════════════════════════════╝
-```
-
-### Visão Geral
-
-Nexus Apex é uma infraestrutura de processamento de dados financeiros que transforma fluxos brutos de múltiplas fontes em inteligência estruturada, disponibilizada em tempo quase real para análise e decisão.
-
-A arquitetura **Kappa** adopta um modelo revolucionário: um único pipeline, dois cenários. Os mesmos transformadores que processam dados ao vivo reprocessam históricos, eliminando duplicação lógica e reduzindo pontos de falha.
-
-**Diferencial:** O sistema não apenas coleta dados — orquestra, valida, enriquece e serve com garantias de consistência, auditoria completa e capacidade de reprocessamento total.
+> **Versão:** 1.0  
+> **Mercados cobertos:** Brasil (B3, CVM, Bacen) · EUA (Yahoo Finance, Alpha Vantage) · Global (Cripto, Forex, Macro)
 
 ---
 
-## Fontes de Dados: A Rede de Captura
+## O que é este projeto
 
-Oito fluxos independentes alimentam o sistema com dados de múltiplos horizontes temporais e geográficos:
+Este projeto é um pipeline de dados financeiros que coleta, processa e disponibiliza informações de múltiplos mercados em tempo quase real. A ideia central é simples: os dados chegam de diversas fontes, passam por um processo de limpeza e organização, e ficam disponíveis para consulta por dashboards, APIs e ferramentas de análise.
 
-| Fonte | Escopo | Frequência | Cobertura |
-|-------|--------|-----------|----------|
-| **Yahoo Finance** | Ações, ETFs, Índices | 15 min | Brasil + EUA |
-| **Alpha Vantage** | Forex, Criptomoedas | 15 min | Global |
-| **B3** | Fechamento oficial | Diário (18h) | Brasil |
-| **CVM** | Documentação corporativa | Daily scan | Brasil (empresas abertas) |
-| **Bacen** | Indicadores macroeconômicos | Diário (meio-dia) | Brasil |
-| **CoinGecko** | Preços de 200+ criptomoedas | 15 min | 24/7 Global |
-| **FRED** | Macro EUA (CPI, Fed Funds, Treasuries) | Diário | EUA |
-| **ECB** | Forex EUR/USD, Indicadores europeus | Diário | Europa |
+A arquitetura adotada é chamada de **Kappa**  um modelo que trata todos os dados como um fluxo contínuo de eventos, usando um único pipeline para dados em tempo real e para reprocessamentos históricos. Isso significa menos complexidade e um único código que serve a todos os casos.
 
 ---
 
-## Anatomia do Pipeline: Do Caos à Ordem
+## De onde vêm os dados
 
-```
-COLETA                 DISTRIBUIÇÃO              TRANSFORMAÇÃO             PERSISTÊNCIA
-════════════════════════════════════════════════════════════════════════════════════════
+O pipeline coleta informações de oito fontes distintas:
 
-Fonte 1 ─┐
-Fonte 2 ─┼─→ Eventos Brutos ─→ Pub/Sub ─┬─→ Processador Spark ─→ Validação ─┐
-Fonte 3 ─┤                     (barramento) │   (Dedup, Norm,      (QA)       ├─→ BigQuery
-Fonte 4 ─┤                                 │    Agregação,                    │
-Fonte 5 ─┼─────────────────────────────────┼─────Enriquecimento)─────────────┘
-Fonte 6 ─┤                                 │
-Fonte 7 ─┤                                 └─→ Cloud Storage (Histórico 30d)
-Fonte 8 ─┘
-```
-
-### Estágio 1: Publicação de Eventos
-Cada fonte, em sua própria cadência, publica eventos estruturados no barramento central. Cada mensagem carrega: timestamp, identificador único, tipo de ativo, mercado e valor.
-
-### Estágio 2: Distribuição Dual
-O Pub/Sub bifurca o fluxo:
-- **Via rápida** → Processador em tempo real (latência < 2 minutos)
-- **Via arquivo** → Cloud Storage para reprocessamento futuro (retenção: 30 dias)
-
-### Estágio 3: Transformação e Enriquecimento
-O Apache Spark aplica as operações core do pipeline:
-
-- **Deduplicação** — Eventos duplicados no transporte são descartados (garante idempotência)
-- **Normalização** — Tipos de dados, tickers e timestamps são padronizados; valores inválidos removidos
-- **Agregação Temporal** — Cálculo de OHLCV (Open, High, Low, Close, Volume) em janelas de 15 minutos e 1 dia
-- **Enriquecimento** — Acréscimo de metadados: nome do ativo, setor, bolsa, moeda base
-
-### Estágio 4: Persistência e Serving
-Dados processados são gravados no BigQuery com três dimensões de particionamento:
-- Data (otimiza varreduras históricas)
-- Mercado (Brasil, EUA, Cripto, etc.)
-- Ativo (acelera consultas por título específico)
+| Fonte | O que fornece | Quando coleta |
+|---|---|---|
+| **Yahoo Finance** | Cotações de ações brasileiras e americanas, ETFs e  índices | A cada 15 minutos, durante o horário de mercado |
+| **Alpha Vantage** | Câmbio (Forex) e criptomoedas | A cada 15 minutos |
+| **B3 (Bovespa)** | Cotações oficiais de fechamento do mercado brasileiro | Diariamente, após o fechamento (18h) |
+| **CVM** | Documentos de empresas abertas: balanços, ITRs e fatos relevantes | Varredura diária |
+| **Bacen (SGS)** | Indicadores econômicos: Selic, IPCA, CDI e câmbio oficial | Diariamente ao meio-dia |
+| **CoinGecko** | Preços das 200 principais criptomoedas | A cada 15 minutos, 24 horas por dia |
+| **FRED (Federal Reserve)** | Indicadores macro dos EUA: CPI, Fed Funds e Treasuries | Diariamente |
+| **ECB (Banco Central Europeu)** | Câmbio EUR/USD e indicadores europeus | Diariamente |
 
 ---
 
-## Camadas de Armazenamento
+## Como o pipeline funciona
 
-### Camada 1: Barramento de Eventos (Pub/Sub)
-Núcleo do sistema. Retém mensagens por 7 dias em tópicos segregados por tipo de dado. Permite reprocessamento de dados recentes e garante nenhuma mensagem seja perdida durante falhas transitórias.
+O fluxo de dados percorre quatro etapas principais:
 
-### Camada 2: Arquivo Histórico (Cloud Storage)
-Cópia imutável de todos os eventos brutos. Organizados em hierarquia de partições: `topic/year/month/day/hour/*.parquet`. Retém 30 dias, serve como fonte de verdade para reprocessamentos maiores.
+### 1. Coleta e publicação
+Processos automatizados coletam dados de cada fonte e os publicam como eventos em um barramento central. Cada evento carrega informações padronizadas: identificador único, horário, fonte, ativo e o dado em si.
 
-### Camada 3: Banco de Dados Transacional (BigQuery)
-Destino final otimizado para leitura. Tabelas desnormalizadas por mercado/ativo, índices em timestamps e tickers. Tempo de resposta: < 5 segundos para consultas ad-hoc, < 100ms para dashboards em cache.
+### 2. Distribuição dos eventos
+O barramento central (Pub/Sub) recebe todos os eventos e os distribui simultaneamente para dois destinos: o processador em tempo real e o arquivo histórico no armazenamento em nuvem.
 
----
+### 3. Processamento
+Um motor de processamento recebe os eventos e aplica as seguintes transformações:
 
-## Consumidores dos Dados
+- **Deduplicação**  elimina eventos duplicados que possam ter chegado mais de uma vez
+- **Normalização**  padroniza tipos de dados, formatos de ticker e remove valores inválidos
+- **Agregação em janelas temporais**  calcula abertura, máxima, mínima, fechamento e volume (OHLCV) em janelas de 15 minutos e diárias
+- **Enriquecimento**  adiciona informações cadastrais dos ativos (nome, setor, bolsa)
 
-### Dashboards Analíticos
-Ferramentas de visualização (Looker / Metabase) conectadas diretamente ao BigQuery com controle de acesso por perfil. Atualização em tempo real de cotações, volumes e indicadores macroeconômicos.
-
-### API REST
-Servidor FastAPI no Cloud Run expõe três categorias de endpoints:
-- `/quotes/{ticker}` — Última cotação + histórico intraday
-- `/ohlcv/{ticker}/{period}` — Barras de 15 min, horária, diária
-- `/macroeconomics/{indicator}` — Séries macroeconômicas (Selic, IPCA, CPI, etc.)
-
-Cache em memória (5 minutos) acelera consultas repetidas. Tempo de resposta típico: 200-500ms.
-
-### Notebooks Científicos
-Ambiente de análise exploratória (Vertex AI Workbench) com acesso SQL direto ao BigQuery. Usado para backtesting, desenvolvimento de modelos e pesquisa quantitativa.
+### 4. Disponibilização
+Os dados processados são gravados em tabelas organizadas por data, ativo e mercado, prontas para consulta eficiente.
 
 ---
 
-## Reprocessamento Histórico (Replay): O Poder da Kappa
+## Onde os dados ficam armazenados
 
-Um dos maiores diferenciais é a capacidade de reprocessar dados usando exatamente o mesmo código de transformação usado em tempo real.
+Os dados percorrem três tipos de armazenamento com funções distintas:
 
-**Cenários de uso:**
-- Bug corrigido → Recalcular dados dos últimos 15 dias
-- Nova feature (coluna) → Preencher retroativamente com lógica atual
-- Outage ou falha → Recuperar dados perdidos até 30 dias atrás
-- Mudança na lógica de enriquecimento → Atualizar todos os históricos
+**Barramento de eventos (Pub/Sub)**
+Ponto central por onde todos os eventos transitam. Mantém as mensagens disponíveis por 7 dias, o que permite reprocessar dados recentes em caso de falha.
 
-**Fluxo:** `Cloud Storage (arquivo) → Spark Job (mesmo código) → BigQuery (sobrescreve) → Validação automática`
+**Arquivo histórico (Cloud Storage)**
+Cópia de todos os eventos brutos, organizada por tópico, ano, mês, dia e hora. Retém os dados por 30 dias e serve como fonte para reprocessamentos históricos.
 
-Tempo típico: 10-30 minutos para reprocessar 7 dias de dados.
-
----
-
-## Orquestração e Confiabilidade
-
-**Cloud Composer 2** (Airflow gerenciado pelo GCP) orquestra a sinfonia completa:
-
-```
-EveryDay 00:00 ─── Scheduler ─── Coleta B3 ─┐
-                                              ├─→ Validação QA ─→ Alert via Slack
-EveryDay 12:00 ─── Scheduler ─── Coleta Bacen ┤
-                                              │
-Every 15min    ─── Scheduler ─── Coleta Forex ┘
-```
-
-**Responsabilidades:**
-- Agendar coletores de dados em suas cadências
-- Provisionar/desprovisionar clusters Spark sob demanda (reduz custo em 70%)
-- Monitorar latência de eventos (alertar se fila > 30 minutos)
-- Validar qualidade diária: volume mínimo, nulidade, duplicatas
-- Disparar reprocessamentos automáticos em caso de anomalia
+**Camada de serviço (BigQuery)**
+Destino final dos dados processados. As tabelas são otimizadas para consulta rápida, particionadas por data e indexadas por ativo e mercado. É daqui que dashboards, APIs e notebooks lêem os dados.
 
 ---
 
-## Stack Tecnológico
+## Como os dados são consumidos
 
-| Layer | Ferramenta | Função |
-|-------|-----------|--------|
-| **Orquestração** | Cloud Composer 2 (Airflow) | Orquestra workflows, agendamento, retries |
-| **Pub/Sub** | Google Cloud Pub/Sub | Barramento de eventos, 7d retenção |
-| **Processamento** | Apache Spark + Dataproc | ETL, transformações, agregações |
-| **Armazenamento Bruto** | Cloud Storage (Parquet) | Arquivo imutável, 30d |
-| **Data Warehouse** | BigQuery | Queries ad-hoc, dashboards, análise |
-| **API** | Cloud Run + FastAPI | REST endpoints, low-latency serving |
-| **Segredos** | Secret Manager | Chaves de API, credenciais com rotação |
-| **Monitoramento** | Cloud Logging + Cloud Monitoring | Traces distribuídos, alertas, SLOs |
-| **Análise** | Vertex AI Workbench (Jupyter) | Environment para ciência de dados |
-| **Visualização** | Looker + Metabase | Dashboards executivos |
+Três tipos de consumidores acessam os dados processados:
+
+**Dashboards**
+Ferramentas de visualização (Looker ou Metabase) conectadas diretamente ao BigQuery, com acesso restrito à camada de serviço. Usadas para acompanhar cotações, indicadores macro e volumes de mercado em painéis visuais.
+
+**API REST**
+Uma API web (hospedada no Cloud Run) expõe endpoints para consulta de cotações, séries históricas OHLCV e indicadores macroeconômicos. Responde em segundos graças a um cache que armazena resultados frequentes por até 5 minutos.
+
+**Notebooks analíticos**
+Ambiente de análise exploratória (Vertex AI Workbench) com acesso direto ao BigQuery para análises quantitativas, backtesting e desenvolvimento de modelos.
 
 ---
 
-## Status de Implementação
+## Reprocessamento histórico (Replay)
 
-```
-Fase 1: Infraestrutura
-  [████████████░░░░░░░░] 60%
-  ✓ Pub/Sub configurado
-  ✓ BigQuery schemas definidos
-  ○ Cloud Composer DAGs em refinamento
+Um dos diferenciais da arquitetura Kappa é a capacidade de reprocessar dados históricos usando exatamente o mesmo código do processamento em tempo real. Isso é útil quando:
 
-Fase 2: Coletores de Dados
-  [░░░░░░░░░░░░░░░░░░░░] 0%
-  ○ Yahoo Finance connector
-  ○ B3 parser (CrawlerBot)
-  ○ Alpha Vantage sync
-  ○ CVM document ingestion
+- Um bug é corrigido e os dados dos últimos dias precisam ser recalculados
+- Uma nova coluna é adicionada e precisa ser preenchida retroativamente
+- O pipeline ficou inativo por algum período e os dados precisam ser recuperados
+- A lógica de enriquecimento muda e os dados históricos precisam ser atualizados
 
-Fase 3: Motor de Transformação
-  [░░░░░░░░░░░░░░░░░░░░] 0%
-  ○ Spark transformers (dedup, norm)
-  ○ Agregações OHLCV
-  ○ Enriquecimento (metadados)
-  ○ Tests unitários + integração
-
-Fase 4: Serving e Qualidade
-  [░░░░░░░░░░░░░░░░░░░░] 0%
-  ○ API FastAPI endpoints
-  ○ Cache em memória (Redis)
-  ○ Dashboards Looker
-  ○ SLO monitoring
-```
+O reprocessamento pode cobrir qualquer janela dentro dos últimos 30 dias, lendo do arquivo histórico no Cloud Storage.
 
 ---
 
-## Princípios de Design
+## Orquestração e monitoramento
 
-1. **Event-First** — Tudo é evento; imutabilidade é lei. Replay é garantido.
-2. **Kappa sobre Lambda** — Um pipeline, dois cenários (tempo real + histórico).
-3. **Data Quality como Feature** — Validação integrada, não uma etapa. Alertas automáticos.
-4. **Infrastructure-as-Code** — Toda a infra versionada, reproduzível, idempotente.
-5. **Observabilidade Extrema** — Logs distribuídos, traces, métricas em cada ponto.
+Todo o ciclo de vida do pipeline é gerenciado pelo **Cloud Composer** (Airflow), que é responsável por:
 
----
+- Agendar e executar os coletores de cada fonte de dados
+- Criar os ambientes de processamento sob demanda e destruí-los após o uso
+- Monitorar o atraso na fila de eventos e alertar quando ele ultrapassar 30 minutos
+- Verificar diariamente a qualidade dos dados (volume mínimo, ausência de nulos, sem duplicatas)
+- Acionar reprocessamentos quando necessário
 
-## Como Contribuir
-
-Nexus Apex é uma plataforma em desenvolvimento. Ideias, issues e PRs são bem-vindas.
-
-**Roadmap futuro:**
-- Machine learning pipeline para forecasting de preços
-- Alertas inteligentes baseados em anomalias
-- Suporte a blockchain e DeFi
-- Integração com APIs de brokers para order routing
+Alertas de falha são enviados automaticamente via Slack.
 
 ---
 
-```
-╔════════════════════════════════════════════════════════════════╗
-║                    NEXUS APEX                                  ║
-║         Onde os dados se elevam ao ápice da clareza            ║
-║                                                                ║
-║  _Ex chao ordo, in nexu veritas_                              ║
-║  (Do caos nasce a ordem, na conexão habita a verdade)         ║
-╚════════════════════════════════════════════════════════════════╝
-```
+## Ferramentas utilizadas
+
+| Categoria | Ferramenta | Função |
+|---|---|---|
+| **Orquestração** | Cloud Composer 2 (Airflow) | Agenda e monitora todo o pipeline |
+| **Barramento de eventos** | Cloud Pub/Sub | Distribui eventos entre os componentes |
+| **Processamento** | Apache Spark (Dataproc) | Transforma e agrega os dados |
+| **Armazenamento histórico** | Cloud Storage (GCS) | Arquivo de eventos brutos por 30 dias |
+| **Camada de serviço** | BigQuery | Armazena e serve os dados processados |
+| **API** | Cloud Run + FastAPI | Expõe endpoints REST para consulta |
+| **Dashboards** | Looker / Metabase | Visualização e análise |
+| **Segredos** | Secret Manager | Gerencia chaves de API com segurança |
+| **Monitoramento** | Cloud Monitoring + Logging | Alertas e rastreabilidade |
+
+---
+
+## Status de implementação
+
+**Fase 1  Infraestrutura** *(concluída parcialmente)*
+- [x]
+
+**Fase 2  Coletores** *(pendente)*
+- [ ]
+
+**Fase 3  Processamento** *(pendente)*
+- [ ] 
+
+**Fase 4  Serving e qualidade** *(pendente)*
+- [ ]
+
+---
+
+>**Nexus Apex**, A conexão que eleva o pulso do mercado ao ápice da inteligência  
+>_Ex chao ordo, in nexu veritas_
